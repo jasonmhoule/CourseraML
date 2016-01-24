@@ -1,0 +1,118 @@
+---
+title: "Practical Machine Learning: Course Project"
+author: "Jason Houle"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Practical Machine Learning: Course Project}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+## Objective
+The goal is to create a model that can predict the manner ("classe", or a classification of exercise technique) in which participants exercise (dumbell lift) using data points available.
+
+Training data exists from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+This report describes:
+
+- How I built the model,
+- How I used cross validation,
+- What the expected out of sample error is,
+- Why I made the choices I did.
+
+## Source Data
+More information about the data is available from the website here: http://groupware.les.inf.puc-rio.br/har. Many thanks to the group that provided this data.
+
+## Data Processing
+
+Training data ([training set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [test set](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) in .csv files) is downloaded into a local `./data` folder. Once the data is loaded, I reviewed the `full_testing` file and stripped all columns with `NA` observations. Since these are not available for predicting the quiz cases, I decided not to use them in building my model.
+
+```{r, cache=TRUE}
+# Load
+full_training <- read.csv("./data/train.csv")
+full_testing <- read.csv("./data/test.csv")
+
+# Preprocessing: Use only those variables available to predict on!
+final_test_set <- full_testing[,!is.na(full_testing[1,])]
+train_set <- full_training[,!is.na(full_testing[1,])]
+```
+
+I used a 75/25 split for a cross-validation set that would allow me to estimate out-of-sample error. (Note that `final_test_set` are the 20 quiz results, while `testing` is cross-validation data.) I also carried out further preprocessing to change data types in several columns from integers to numerics.
+
+```{r, cache=TRUE, results='hide'}
+library(caret)
+# Split 75% to train, remainder to test
+inTrain <- createDataPartition(y=train_set$classe,
+                               p=0.75, list=FALSE)
+training <- train_set[inTrain,]
+testing <- train_set[-inTrain,]
+
+# Convert integers to numerics
+xx <- sapply(training[1,],class)=="integer"
+training[,names(xx[xx==TRUE])] <- sapply(training[,names(xx[xx==TRUE])],as.numeric)
+
+```
+
+## Data Exploration
+
+Initial investigation sought to establish the level to which data were correlated. (Note that `-c(1:7,60)` is used regularly from here to strip descriptor data like index, `user_name`, timestamps, etc., as well as the `classe` variable.)
+
+The length of the resulting list, as well as the high degree of correlation (illustrated below with an example plot of two variables from the list) indicates that pre-processing to reduce dimensionality may be beneficial.
+
+```{r, cache=TRUE}
+# Calculate correlation matrix and summarize main correlated values
+M <- abs(cor(training[,-c(1:7,60)]))
+diag(M) <- 0
+which(M > 0.8,arr.ind=T)
+
+# Example of correlated values
+qplot(training$accel_belt_z,training$roll_belt)
+```
+
+
+## PCA Pre-processing and Model Fit
+I conducted Principal Components Analysis pre-processing with 20 components. I selected 20 
+
+I then trained a random forest on these components. The random forest provides a good first choice for investigation and is an easy starting point.
+
+```{r, cache=TRUE}
+preProc <- preProcess(training[,-c(1:7,60)], method="pca", pcaComp=20)
+trainPC <- predict(preProc,training[,-c(1:7,60)])
+modelFit <- train(training$classe ~ .,method="rf",
+                  data=trainPC)
+```
+
+This took roughly one hour on my machine. (I also attempted to pare down the number of PCA components used to determine the tradeoff of speed and accuracy; however, with as few as 5 components, no noticeable speedup was observed.)
+
+In this case, the first model tested provided good results and > 96% accuracy.
+
+```{r, cache=TRUE}
+modelFit
+```
+
+## Validation
+The model was cross-validated against the test set separated above. The out-of-sample error rate is predicted as 99.5%. Importantly, the model also achieves high (>.997) predictive power (both positive and negative) specifically for Class A, which is the correct exercise technique.
+
+```{r, cache=TRUE}
+# Check against test set
+testPC <- predict(preProc,testing[,-c(1:7,60)])
+confusionMatrix(testing$classe,
+                predict(modelFit,testPC))
+
+```
+
+## Predict Final Test Values
+Finally, the model was used to predict the 20 test cases that were not classfied.
+```{r, cache=TRUE}
+# Pre-process final test data using xx name set from above
+final_test_set[,names(xx[xx==TRUE])] <-
+    sapply(final_test_set[,names(xx[xx==TRUE])],as.numeric)
+
+# Run prediction
+finalTestPC <- predict(preProc,final_test_set[,-c(1:7,60)])
+predictions <- predict(modelFit,finalTestPC)
+names(predictions) <- 1:20
+```
+
+The model correctly predicted 19 of the 20 test cases.
